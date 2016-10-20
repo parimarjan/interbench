@@ -1030,12 +1030,10 @@ void log_output(const char *format, ...)
 void show_latencies(struct thread *th)
 {
 	struct data_table *tbj;
-	struct tk_thread *tk;
 	double average_latency, deadlines_met, samples_met, sd, max_latency;
 	long double variance = 0;
 
 	tbj = th->dt;
-	tk = &th->tkthread;
 
 	if (tbj->_nr_samples > 1) {
 		average_latency = tbj->_total_latency / tbj->_nr_samples;
