@@ -26,10 +26,10 @@ struct tk_thread {
 };
 
 struct data_table {
-	unsigned long long total_latency;
-	unsigned long long sum_latency_squared;
-	unsigned long max_latency;
-	unsigned long nr_samples;
+	unsigned long long _total_latency;
+	unsigned long long _sum_latency_squared;
+	unsigned long _max_latency;
+	unsigned long _nr_samples;
 	unsigned long deadlines_met;
 	unsigned long missed_deadlines;
 	unsigned long long missed_burns;

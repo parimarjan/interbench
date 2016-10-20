@@ -369,6 +369,15 @@ retry:
 	return retval;
 }
 
+inline void record_sample(struct data_table *tb, unsigned long latency)
+{
+	if (latency > tb->_max_latency)
+		tb->_max_latency = latency;
+	tb->_total_latency += latency;
+	tb->_sum_latency_squared += latency * latency;
+	tb->_nr_samples++;
+}
+
 unsigned long periodic_schedule(struct thread *th, unsigned long run_usecs,
 	unsigned long interval_usecs, unsigned long long deadline)
 {
@@ -442,24 +451,20 @@ out_nosleep:
 	 * called again and the missed latency can be lost
 	 */
 	latency += missed_latency;
-	if (latency > tb->max_latency)
-		tb->max_latency = latency;
-	tb->total_latency += latency;
-	tb->sum_latency_squared += latency * latency;
-	tb->nr_samples++;
+	record_sample(tb, latency);
 
 	return deadline;
 }
 
 void initialise_thread_data(struct data_table *tb)
 {
-	tb->max_latency =
-		tb->total_latency =
-		tb->sum_latency_squared =
+	tb->_max_latency =
+		tb->_total_latency =
+		tb->_sum_latency_squared =
 		tb->deadlines_met =
 		tb->missed_deadlines =
 		tb->missed_burns =
-		tb->nr_samples = 0;
+		tb->_nr_samples = 0;
 }
 
 void create_pthread(pthread_t  * thread, pthread_attr_t * attr,
@@ -576,11 +581,7 @@ void emulate_game(struct thread *th)
 			tb->missed_burns += latency;
 		} else
 			latency = 0;
-		if (latency > tb->max_latency)
-			tb->max_latency = latency;
-		tb->total_latency += latency;
-		tb->sum_latency_squared += latency * latency;
-		tb->nr_samples++;
+		record_sample(tb, latency);
 		if (!trywait_sem(s))
 			return;
 	}
@@ -1035,13 +1036,13 @@ void show_latencies(struct thread *th)
 	tbj = th->dt;
 	tk = &th->tkthread;
 
-	if (tbj->nr_samples > 1) {
-		average_latency = tbj->total_latency / tbj->nr_samples;
-		variance = (tbj->sum_latency_squared - (average_latency *
-			average_latency) / tbj->nr_samples) / (tbj->nr_samples - 1);
+	if (tbj->_nr_samples > 1) {
+		average_latency = tbj->_total_latency / tbj->_nr_samples;
+		variance = (tbj->_sum_latency_squared - (average_latency *
+			average_latency) / tbj->_nr_samples) / (tbj->_nr_samples - 1);
 		sd = sqrtl(variance);
 	} else {
-		average_latency = tbj->total_latency;
+		average_latency = tbj->_total_latency;
 		sd = 0.0;
 	}
 
@@ -1054,7 +1055,7 @@ void show_latencies(struct thread *th)
 		    (double)(tbj->achieved_burns + tbj->missed_burns) * 100;
 	else
 		samples_met = 0.0;
-	max_latency = tbj->max_latency;
+	max_latency = tbj->_max_latency;
 	/* When benchmarking rt we represent the data in us */
 	if (!ud.do_rt) {
 		average_latency /= 1000;
