@@ -48,8 +48,9 @@
 #include <sys/wait.h>
 #include "interbench.h"
 
+#define MAX_SAMPLES_PER_SECOND	2000
 #define MAX_UNAME_LENGTH	100
-#define MAX_LOG_LENGTH		((MAX_UNAME_LENGTH) + 4)
+#define MAX_LOG_LENGTH		((MAX_UNAME_LENGTH) + 8)
 #define MIN_BLK_SIZE		1024
 #define DEFAULT_RESERVE		64
 #define MB			(1024 * 1024)	/* 2^20 bytes */
@@ -63,22 +64,32 @@ struct user_data {
 	int do_rt;
 	int bench_nice;
 	int load_nice;
+	unsigned int max_latency_samples;
 	unsigned long custom_run;
 	unsigned long custom_interval;
 	unsigned long cpu_load;
 	char logfilename[MAX_LOG_LENGTH];
+	char latencyfilename[MAX_LOG_LENGTH];
+	int detailed;
 	int log;
 	char unamer[MAX_UNAME_LENGTH];
 	char datestamp[13];
 	FILE *logfile;
+	FILE *loglatencies;
 } ud = {
 	.duration = 30,
+	.max_latency_samples = 30 * MAX_SAMPLES_PER_SECOND,
 	.cpu_load = 4,
 	.log = 1,
+	.detailed = 0,
 };
 
 /* Pipes main to/from load and bench processes */
 static int m2l[2], l2m[2], m2b[2], b2m[2];
+
+/* Indexes of primary and background workloads */
+unsigned int primary_index = 0;
+unsigned int background_index = 0;
 
 /* Which member of becnhmarks is used when not benchmarking */
 #define NOT_BENCHING	(THREADS)
@@ -240,8 +251,6 @@ void sync_flush(void)
 	if ((fflush(NULL)) == EOF)
 		terminal_error("fflush");
 	sync();
-	sync();
-	sync();
 }
 
 unsigned long compute_allocable_mem(void)
@@ -370,8 +379,15 @@ retry:
 	return retval;
 }
 
-inline void record_sample(struct data_table *tb, unsigned long latency)
+inline void record_sample(struct data_table *tb, unsigned long long current_time, unsigned long latency)
 {
+	if (ud.detailed) {
+		if (tb->_nr_samples >= ud.max_latency_samples)
+			terminal_error("Ran out of space to record samples");
+		tb->samples[tb->_nr_samples].timestamp_us = current_time;
+		tb->samples[tb->_nr_samples].latency = latency;
+	}
+
 	if (latency > tb->_max_latency)
 		tb->_max_latency = latency;
 	tb->_total_latency += latency;
@@ -452,7 +468,7 @@ out_nosleep:
 	 * called again and the missed latency can be lost
 	 */
 	latency += missed_latency;
-	record_sample(tb, latency);
+	record_sample(tb, current_time, latency);
 
 	return deadline;
 }
@@ -466,6 +482,16 @@ void initialise_thread_data(struct data_table *tb)
 		tb->missed_deadlines =
 		tb->missed_burns =
 		tb->_nr_samples = 0;
+
+	tb->samples = NULL;
+	if (ud.detailed) {
+		size_t len = sizeof(struct data_sample) * ud.max_latency_samples;
+		int pagesize = getpagesize();
+
+		if (posix_memalign((void **)&tb->samples, pagesize, len))
+			terminal_error("posix_memalign");
+		mlock(tb->samples, len & ~(pagesize-1));
+	}
 }
 
 void create_pthread(pthread_t  * thread, pthread_attr_t * attr,
@@ -582,7 +608,7 @@ void emulate_game(struct thread *th)
 			tb->missed_burns += latency;
 		} else
 			latency = 0;
-		record_sample(tb, latency);
+		record_sample(tb, current_time, latency);
 		if (!trywait_sem(s))
 			return;
 	}
@@ -1079,6 +1105,17 @@ void show_latencies(struct thread *th)
 	if (!th->nodeadlines)
 		log_output("\t%11.3g", deadlines_met);
 	log_output("\n");
+
+	/* Write detailed latencies if required */
+	if (ud.detailed) {
+		for (unsigned int i = 0; i < tbj->_nr_samples; i++) {
+			fprintf(ud.loglatencies, "%llu %8s-%-8s %lu\n",
+				tbj->samples[i].timestamp_us,
+				threadlist[primary_index].label,
+				threadlist[background_index].label,
+				tbj->samples[i].latency);
+		}
+	}
 	sync_flush();
 }
 
@@ -1179,6 +1216,7 @@ void get_logfilename(void)
 	sprintf(ud.datestamp, "%2d%02d%02d%02d%02d",
 		year, month, day, hours, minutes);
 	snprintf(ud.logfilename, MAX_LOG_LENGTH, "%s.log", ud.unamer);
+	snprintf(ud.latencyfilename, MAX_LOG_LENGTH, "%s.latency", ud.unamer);
 }
 
 void start_thread(struct thread *th)
@@ -1403,6 +1441,7 @@ void usage(void)
 	fprintf(stderr, " -B\tNice the benchmarked thread to <int> (default: 0)\n");
 	fprintf(stderr, " -N\tNice the load thread to <int> (default: 0)\n");
 	fprintf(stderr, " -u\tImitate uniprocessor\n");
+	fprintf(stderr, " -d\tRecord detailed samples\n");
 	fprintf(stderr, " -b\tBenchmark loops_per_ms even if it is already known\n");
 	fprintf(stderr, " -c\tOutput to console only (default: use console and logfile)\n");
 	fprintf(stderr, " -r\tPerform real time scheduling benchmarks (default: non-rt)\n");
@@ -1464,7 +1503,9 @@ inline void set_bit_on(unsigned int *mask, int index)
 int main(int argc, char **argv)
 {
 	unsigned long custom_cpu = 0;
-	int q, i, j, affinity, benchmark = 0;
+	int q, i, j;
+	unsigned int affinity = 0;
+	unsigned int benchmark = 0;
 	unsigned int selected_loads = 0;
 	unsigned int excluded_loads = 0;
 	unsigned int selected_benches = 0;
@@ -1482,7 +1523,7 @@ int main(int argc, char **argv)
 		terminal_error("signal");
 #endif
 
-	while ((q = getopt(argc, argv, "hl:L:B:N:ut:bcnrC:I:m:w:x:W:X:")) != -1) {
+	while ((q = getopt(argc, argv, "hl:L:B:N:ut:bcnrdC:I:m:w:x:W:X:")) != -1) {
 		switch (q) {
 			case 'h':
 				usage();
@@ -1492,6 +1533,7 @@ int main(int argc, char **argv)
 				break;
 			case 't':
 				ud.duration = atoi(optarg);
+				ud.max_latency_samples = ud.duration * MAX_SAMPLES_PER_SECOND;
 				break;
 			case 'L':
 				ud.cpu_load = atoi(optarg);
@@ -1504,6 +1546,9 @@ int main(int argc, char **argv)
 				break;
 			case 'u':
 				affinity = 1;
+				break;
+			case 'd':
+				ud.detailed = 1;
 				break;
 			case 'b':
 				benchmark = 1;
@@ -1680,6 +1725,13 @@ loops_known:
 		fprintf(stderr, "Unable to write to logfile\n");
 		ud.log = 0;
 	}
+	if (ud.detailed && !(ud.loglatencies = fopen(ud.latencyfilename, "a"))) {
+		if (errno != EACCES)
+			terminal_error("fopen");
+		fprintf(stderr, "Unable to write to latency file\n");
+		ud.log = 0;
+	}
+
 	log_output("\n");
 	log_output("Using %lu loops per ms, running every load for %d seconds\n",
 		ud.loops_per_ms, ud.duration);
@@ -1734,6 +1786,8 @@ loops_known:
 					continue;
 			log_output("%s\t", thj->label);
 			sync_flush();
+			primary_index = i;
+			background_index = j;
 			bench(i, j);
 		}
 		log_output("\n");
@@ -1741,6 +1795,8 @@ loops_known:
 	log_output("\n");
 	if (ud.log)
 		fclose(ud.logfile);
+	if (ud.detailed)
+		fclose(ud.loglatencies);
 
 	return 0;
 }

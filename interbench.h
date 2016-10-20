@@ -25,6 +25,11 @@ struct tk_thread {
 	unsigned long slept_interval;
 };
 
+struct data_sample {
+	unsigned long long timestamp_us;
+	unsigned long latency;
+};
+
 struct data_table {
 	unsigned long long _total_latency;
 	unsigned long long _sum_latency_squared;
@@ -34,6 +39,7 @@ struct data_table {
 	unsigned long missed_deadlines;
 	unsigned long long missed_burns;
 	unsigned long long achieved_burns;
+	struct data_sample *samples;
 };
 
 struct thread {
