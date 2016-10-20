@@ -1402,7 +1402,7 @@ void usage(void)
 	fprintf(stderr, " -t\tSeconds to run each benchmark (default: 30)\n");
 	fprintf(stderr, " -B\tNice the benchmarked thread to <int> (default: 0)\n");
 	fprintf(stderr, " -N\tNice the load thread to <int> (default: 0)\n");
-	//fprintf(stderr, " -u\tImitate uniprocessor\n");
+	fprintf(stderr, " -u\tImitate uniprocessor\n");
 	fprintf(stderr, " -b\tBenchmark loops_per_ms even if it is already known\n");
 	fprintf(stderr, " -c\tOutput to console only (default: use console and logfile)\n");
 	fprintf(stderr, " -r\tPerform real time scheduling benchmarks (default: non-rt)\n");
@@ -1601,7 +1601,6 @@ int main(int argc, char **argv)
 	}
 
 	/*FIXME Affinity commented out till working on all architectures */
-#if 0
 	if (affinity) {
 #ifdef CPU_SET	/* Current glibc expects cpu_set_t */
 		cpu_set_t cpumask;
@@ -1617,7 +1616,6 @@ int main(int argc, char **argv)
 			fprintf(stderr, "could not set cpu affinity\n");
 		}
 	}
-#endif
 
 	/* Make benchmark a multiple of 10 seconds for proper range of X loads */
 	if (ud.duration % 10)
