@@ -1108,7 +1108,9 @@ void show_latencies(struct thread *th)
 
 	/* Write detailed latencies if required */
 	if (ud.detailed) {
-		for (unsigned int i = 0; i < tbj->_nr_samples; i++) {
+		unsigned int i;
+
+		for (int i = 0; i < tbj->_nr_samples; i++) {
 			fprintf(ud.loglatencies, "%llu %8s-%-8s %lu\n",
 				tbj->samples[i].timestamp_us,
 				threadlist[primary_index].label,
